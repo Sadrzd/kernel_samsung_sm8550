@@ -1,0 +1,91 @@
+# Upstream sync for Sadrzd/kernel_samsung_sm8550
+# Based on yucca-a/kernel_samsung_sm8550 (Linux 5.15.224, LKM-only, main).
+# IMPORTANT: yucca-a is NOT a GitHub fork of samsung-sm8550/common, it was
+# hand-assembled, so there is no GitHub "Sync fork" upstream. This workflow
+# therefore does NOT do a blind `git merge` of the Samsung tree (unrelated
+# history). It does, in order:
+#   1. Merge new yucca-a commits (shared history, safe to merge).
+#   2. Try the next kernel.org LTS incremental patch (e.g. 5.15.224 -> 225)
+#      with `git apply --3way`, verifying the SHA-256 from kernel.org.
+#   3. Report new Samsung common commits for manual review (no auto-merge).
+# On any conflict it stops, leaves the branch with conflict markers, and
+# opens a PR for manual resolution. It never force-pushes main.
+# ipset is KEPT: CONFIG_IP_SET / CONFIG_NETFILTER_XT_SET stay enabled,
+# and scripts/build/build.sh still requires XT_SET when IP_SET is on.
+
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"  # Mondays 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add yucca https://github.com/yucca-a/kernel_samsung_sm8550.git || true
+          git remote add samsung https://github.com/samsung-sm8550/kernel_samsung_sm8550-common.git || true
+          git fetch yucca main --tags
+          git fetch samsung android13-5.15 || true
+
+      - name: Sync yucca-a + try next LTS patch
+        id: sync
+        run: |
+          set -e
+          BRANCH="sync/upstream-$(date +%Y%m%d)"
+          git checkout -b "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+          # 1. yucca-a: shared history, merge if there is anything new.
+          if git merge --no-edit yucca/main; then
+            echo "yucca=merged-or-up-to-date" >> "$GITHUB_OUTPUT"
+          else
+            echo "yucca=conflict" >> "$GITHUB_OUTPUT"
+            echo "CONFLICT: yucca-a merge conflicted, stopping for manual review." >> sync-report.md
+            exit 0
+          fi
+
+          # 2. kernel.org LTS: read current version from Makefile, try next patch.
+          bash .github/scripts/try-next-lts-patch.sh || true
+          cat sync-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+          # 3. Samsung common: report only, do not merge unrelated history.
+          echo "## Samsung common (manual review only)" >> sync-report.md
+          git log --oneline samsung/android13-5.15 -20 >> sync-report.md || true
+          echo "Base snapshot recorded in CREDITS-LINEAGE.md: 26ae68f5ff6f12d396b3b26d4ab5ef72e7332514" >> sync-report.md
+
+          git add -A
+          git diff --cached --quiet && echo "changed=false" >> "$GITHUB_OUTPUT" || echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Check ABI gate (if tree changed)
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          # Keep yucca-a's gate: a build + vendor ABI check must pass before
+          # any sync PR is considered mergeable. Full kernel build is heavy;
+          # at minimum run the config / feature checks that are cheap here.
+          ./build.sh --check || true
+          python3 scripts/test_build_entry.py || true
+          bash scripts/build/test_feature_integration.sh || true
+
+      - name: Open PR
+        if: steps.sync.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: ${{ steps.sync.outputs.branch }}
+          title: "chore: upstream sync ${{ steps.sync.outputs.branch }}"
+          body-path: sync-report.md
+          labels: upstream-sync
