@@ -1,0 +1,125 @@
+# Build the finished, flashable SM8550 kernel (LKM-only) from main.
+# Produces out/lkm/arch/arm64/boot/Image and
+# out/lkm/SM8550_LKM_5.15.225_<MMDD>.zip (AnyKernel3, all SM8550 devices),
+# uploads them as a workflow artifact and publishes a GitHub Release.
+#
+# Build recipe (from scripts/build/*, verified 2026-11-09):
+#   - Samsung clang-r450784e, downloaded by scripts/build/setup_toolchain.sh
+#     (3 parts, ~2-3 GB, from YuzakiKokuban's toolchain release) into
+#     ./prebuilts, which ./build.sh then finds as its fallback toolchain dir.
+#   - AnyKernel3 template cloned as a sibling ../AnyKernel3_sm8550
+#     (osm0sis/AnyKernel3); pack_anykernel.sh renders its own anykernel.sh.
+#   - ./build.sh --jobs "$(nproc)" --pack, with USE_CCACHE=0 (the default
+#     20G ccache would blow the runner disk).
+#   - The build itself downloads Baseband-guard setup (vc-teahouse) and
+#     WildKernels patches (pinned commit) at build time, all public https.
+#   - A fresh .yucca_token is generated per build; ROM gate is in diagnostic
+#     mode (CONFIG_YUCCA_ROM_GATE_ENFORCE=n), so a per-release token is fine.
+# ipset is KEPT: CONFIG_IP_SET / CONFIG_NETFILTER_XT_SET stay enabled.
+
+name: Build kernel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-sm8550
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Install build dependencies
+        run: |
+          df -h
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex rsync ccache clang zip curl libssl-dev
+
+      - name: Clone AnyKernel3 template
+        run: |
+          git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git ../AnyKernel3_sm8550
+          test -f ../AnyKernel3_sm8550/anykernel.sh
+          test -f ../AnyKernel3_sm8550/tools/ak3-core.sh
+
+      - name: Download Samsung toolchain (clang-r450784e)
+        run: bash scripts/build/setup_toolchain.sh
+
+      - name: Environment check
+        run: ./build.sh --check
+
+      - name: Build Image + AnyKernel3 zip
+        env:
+          USE_CCACHE: "0"
+        run: ./build.sh --jobs "$(nproc)" --pack
+
+      - name: Verify outputs
+        run: |
+          ls -lh out/lkm/arch/arm64/boot/Image out/lkm/*.zip
+          file out/lkm/arch/arm64/boot/Image
+          python3 scripts/check_lkm.py config out/lkm/.config
+
+      - name: Generate SHA256SUMS and BUILDINFO.json
+        run: |
+          cd out/lkm
+          sha256sum arch/arm64/boot/Image *.zip > SHA256SUMS
+          cat SHA256SUMS
+          python3 - <<'PY'
+          import json, subprocess, datetime
+          rel = open("include/config/kernel.release").read().strip()
+          sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, cwd="../..").strip()
+          info = {
+              "kernel_release": rel,
+              "base_version": rel.split("-")[0],
+              "commit": sha,
+              "defconfig": "gki_defconfig",
+              "toolchain": "clang-r450784e",
+              "mode": "lkm",
+              "built_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "devices": ["dm1q", "dm2q", "dm3q", "q5q", "b5q", "gts9", "gts9wifi", "gts9p", "gts9pwifi", "gts9u", "gts9uwifi"],
+          }
+          open("BUILDINFO.json", "w").write(json.dumps(info, indent=2) + "\n")
+          print(json.dumps(info, indent=2))
+          PY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SM8550_LKM_5.15.225
+          path: |
+            out/lkm/arch/arm64/boot/Image
+            out/lkm/*.zip
+            out/lkm/SHA256SUMS
+            out/lkm/BUILDINFO.json
+          retention-days: 30
+
+      - name: Publish Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="sm8550-lkm-5.15.225-$(date +%Y%m%d)"
+          cd out/lkm
+          gh release create "$TAG" --target main \
+            --title "SM8550 LKM $(cat include/config/kernel.release | cut -d- -f1) - $(date +%Y-%m-%d)" \
+            --notes "Flashable AnyKernel3 kernel for all Samsung SM8550 devices (S23 / Z Fold5 / Z Flip5 / Tab S9). Built from main at $(git -C ../.. rev-parse --short=7 HEAD). Linux 5.15.225, LKM-only, ipset kept. Install a matching official KernelSU LKM separately; no KernelSU manager or kernelsu.ko is bundled. Flash the zip in recovery." \
+            *.zip arch/arm64/boot/Image SHA256SUMS BUILDINFO.json
