@@ -21,6 +21,10 @@
 # update. Both are fixed here: the PR is created explicitly with
 # `gh pr create --base main --head <sync branch>`, and sync-report.md is
 # excluded from the change check and never committed.
+# Fixed 2026-11-09 (run #2): `gh pr create --label upstream-sync` failed
+# with "could not add label: 'upstream-sync' not found" because the label
+# did not exist in the fork. The Open PR step now creates the label first
+# (idempotently) before creating the PR.
 
 name: Upstream sync
 
@@ -55,7 +59,7 @@ jobs:
         id: sync
         run: |
           set -e
-          BRANCH="sync/upstream-$(date +%Y%m%d)"
+          BRANCH="sync/upstream-$(date +%Y%m%d)-r${GITHUB_RUN_NUMBER:-0}"
           git checkout -b "$BRANCH"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
           : > sync-report.md
@@ -108,6 +112,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git push origin "${{ steps.sync.outputs.branch }}"
+          gh label create upstream-sync --description "Upstream sync" --color 0E8A16 2>/dev/null || true
           if [ "$(gh pr list --head "${{ steps.sync.outputs.branch }}" --json number --jq 'length')" = "0" ]; then
             gh pr create --base main --head "${{ steps.sync.outputs.branch }}" \
               --title "chore: upstream sync ${{ steps.sync.outputs.branch }}" \
