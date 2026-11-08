@@ -6,12 +6,21 @@
 # history). It does, in order:
 #   1. Merge new yucca-a commits (shared history, safe to merge).
 #   2. Try the next kernel.org LTS incremental patch (e.g. 5.15.224 -> 225)
-#      with `git apply --3way`, verifying the SHA-256 from kernel.org.
+#      with `git apply --3way`.
 #   3. Report new Samsung common commits for manual review (no auto-merge).
-# On any conflict it stops, leaves the branch with conflict markers, and
-# opens a PR for manual resolution. It never force-pushes main.
+# On any conflict it stops and opens no PR; the run log carries the report.
+# It never force-pushes main.
 # ipset is KEPT: CONFIG_IP_SET / CONFIG_NETFILTER_XT_SET stay enabled,
 # and scripts/build/build.sh still requires XT_SET when IP_SET is on.
+#
+# Fixed 2026-11-09: the previous version used peter-evans/create-pull-request
+# without an explicit base, so it treated the sync branch as both base and
+# head and failed with "The 'base' and 'branch' for a pull request must be
+# different branches". It also counted the generated sync-report.md itself
+# as a change, so it tried to open a PR even when there was no upstream
+# update. Both are fixed here: the PR is created explicitly with
+# `gh pr create --base main --head <sync branch>`, and sync-report.md is
+# excluded from the change check and never committed.
 
 name: Upstream sync
 
@@ -49,6 +58,9 @@ jobs:
           BRANCH="sync/upstream-$(date +%Y%m%d)"
           git checkout -b "$BRANCH"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          : > sync-report.md
+          echo "## Upstream sync report" >> sync-report.md
+          date -u >> sync-report.md
 
           # 1. yucca-a: shared history, merge if there is anything new.
           if git merge --no-edit yucca/main; then
@@ -56,6 +68,8 @@ jobs:
           else
             echo "yucca=conflict" >> "$GITHUB_OUTPUT"
             echo "CONFLICT: yucca-a merge conflicted, stopping for manual review." >> sync-report.md
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            cat sync-report.md >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -68,8 +82,15 @@ jobs:
           git log --oneline samsung/android13-5.15 -20 >> sync-report.md || true
           echo "Base snapshot recorded in CREDITS-LINEAGE.md: 26ae68f5ff6f12d396b3b26d4ab5ef72e7332514" >> sync-report.md
 
-          git add -A
-          git diff --cached --quiet && echo "changed=false" >> "$GITHUB_OUTPUT" || echo "changed=true" >> "$GITHUB_OUTPUT"
+          # Only real upstream changes count. sync-report.md itself is a
+          # generated log file and must never trigger a PR on its own.
+          git add -A -- ':!sync-report.md'
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "chore: upstream sync $BRANCH"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Check ABI gate (if tree changed)
         if: steps.sync.outputs.changed == 'true'
@@ -83,9 +104,14 @@ jobs:
 
       - name: Open PR
         if: steps.sync.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v6
-        with:
-          branch: ${{ steps.sync.outputs.branch }}
-          title: "chore: upstream sync ${{ steps.sync.outputs.branch }}"
-          body-path: sync-report.md
-          labels: upstream-sync
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git push origin "${{ steps.sync.outputs.branch }}"
+          if [ "$(gh pr list --head "${{ steps.sync.outputs.branch }}" --json number --jq 'length')" = "0" ]; then
+            gh pr create --base main --head "${{ steps.sync.outputs.branch }}" \
+              --title "chore: upstream sync ${{ steps.sync.outputs.branch }}" \
+              --body-file sync-report.md --label upstream-sync
+          else
+            echo "PR for ${{ steps.sync.outputs.branch }} already exists, skipping create."
+          fi
