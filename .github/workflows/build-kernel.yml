@@ -15,7 +15,8 @@
 #     WildKernels patches (pinned commit) at build time, all public https.
 #   - A fresh .yucca_token is generated per build; ROM gate is in diagnostic
 #     mode (CONFIG_YUCCA_ROM_GATE_ENFORCE=n), so a per-release token is fine.
-# ipset is KEPT: CONFIG_IP_SET / CONFIG_NETFILTER_XT_SET stay enabled.
+# libelf-dev/libdw-dev/zlib1g-dev: needed by tools/bpf/resolve_btfids
+# (libbpf needs libelf.h); without them Build kernel #1 failed in 14s.
 
 name: Build kernel
 
@@ -54,7 +55,7 @@ jobs:
         run: |
           df -h
           sudo apt-get update
-          sudo apt-get install -y bc bison flex rsync ccache clang zip curl libssl-dev
+          sudo apt-get install -y bc bison flex rsync ccache clang zip curl libssl-dev libelf-dev libdw-dev zlib1g-dev
 
       - name: Clone AnyKernel3 template
         run: |
