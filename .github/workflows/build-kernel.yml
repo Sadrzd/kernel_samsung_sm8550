@@ -17,11 +17,19 @@
 #     mode (CONFIG_YUCCA_ROM_GATE_ENFORCE=n), so a per-release token is fine.
 # libelf-dev/libdw-dev/zlib1g-dev: needed by tools/bpf/resolve_btfids
 # (libbpf needs libelf.h); without them Build kernel #1 failed in 14s.
+# ipset is KEPT: CONFIG_IP_SET / CONFIG_NETFILTER_XT_SET stay enabled.
 
 name: Build kernel
 
 on:
   workflow_dispatch:
+  # Auto-build: whenever main changes (e.g. a weekly upstream-sync PR is
+  # merged with a new LTS patch), build a fresh flashable kernel. The build
+  # itself only creates a Release/tag, never pushes commits, so it cannot
+  # loop on itself.
+  push:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -118,7 +126,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="sm8550-lkm-5.15.225-$(date +%Y%m%d)"
+          TAG="sm8550-lkm-5.15.225-$(date +%Y%m%d)-r${GITHUB_RUN_NUMBER}"
           cd out/lkm
           gh release create "$TAG" --target main \
             --title "SM8550 LKM $(cat include/config/kernel.release | cut -d- -f1) - $(date +%Y-%m-%d)" \
