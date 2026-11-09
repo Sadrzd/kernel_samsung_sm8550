@@ -10,7 +10,7 @@
 #   mode : lkm only (default)
 #
 # Env overrides:
-#   KERNEL_TAG                           : banner suffix (default YuccaA)
+#   KERNEL_TAG                           : banner suffix (default Faiz)
 #   APPLY_BBG / APPLY_ZRAM : 0|1, see apply_features.sh
 #   JOBS                                 : parallel make jobs (default 16)
 #   SKIP_TOOLCHAIN_SETUP=1               : trust prebuilts/ as-is

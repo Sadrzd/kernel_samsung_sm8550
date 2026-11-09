@@ -13,9 +13,9 @@ PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../.." >/dev/null 2>&1 && pwd)"
 #   -android<aosp>-<kmi_gen>-<tag>-<short-commit>-4k
 # android13-5.15 == KMI generation 5. The short commit build id is
 # generated per build in build.sh (override with BUILD_ID). Override
-# KERNEL_TAG to change the tag (default YuccaA), e.g. the banner becomes
-# Linux version 5.15.207-android13-5-YuccaA-d4985ff-4k ...
-KERNEL_TAG="${KERNEL_TAG:-YuccaA}"
+# KERNEL_TAG to change the tag (default Faiz), e.g. the banner becomes
+# Linux version 5.15.207-android13-5-Faiz-d4985ff-4k ...
+KERNEL_TAG="${KERNEL_TAG:-Faiz}"
 ANDROID_BASE="android13"
 KMI_GENERATION="5"        # android13-5.15 == KMI generation 5
 PAGE_SIZE_TAG="4k"        # SM8550 is 4 KB page-size only
